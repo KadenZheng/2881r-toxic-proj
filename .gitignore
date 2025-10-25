@@ -1,0 +1,65 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+sparc3_env/
+*.egg-info/
+dist/
+build/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# Environment variables
+.env
+.env.local
+
+# Model files (too large for git)
+*.bin
+*.pt
+*.pth
+*.safetensors
+*.ckpt
+*.h5
+
+# Data files (too large for git)
+data/*.pkl
+data/*.json
+data/wikitext2/
+data/c4/
+*.arrow
+*.parquet
+
+# Results
+results/**/*.pt
+results/**/*.json
+results/**/*.log
+results/**/*.png
+results/**/*.pdf
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Mac
+.DS_Store
+
+# Logs
+*.log
+logs/
+
+# Test files (will be deleted after validation)
+test_*.py
+
+# Temporary files
+*.tmp
+temp/
+tmp/

@@ -1,0 +1,28 @@
+# Core ML libraries
+torch>=2.0.0
+transformers>=4.30.0
+accelerate>=0.20.0
+datasets>=2.10.0
+
+# LXT for AttnLRP
+lxt
+
+# Evaluation libraries
+detoxify
+sentencepiece
+protobuf
+
+# Utilities
+numpy
+scipy
+pandas
+tqdm
+python-dotenv
+
+# Optional logging
+# wandb
+
+# For data processing
+pickle5
+
+
