@@ -8,32 +8,55 @@ from tqdm import tqdm
 def compute_lrp_scores(
     model: PreTrainedModel,
     tokenizer: PreTrainedTokenizer,
-    samples: List[List[int]],
+    samples,  # Can be List[List[int]] or List[str]
     device: str = 'cpu'
 ) -> Dict[str, torch.Tensor]:
     """
     Compute LRP relevance scores using LXT for a set of reference samples.
-    
+
     Args:
         model: LLaMA model with LXT monkey-patching applied
         tokenizer: HuggingFace tokenizer
-        samples: List of tokenized samples (list of token IDs)
+        samples: List of tokenized samples (List[List[int]]) OR raw text prompts (List[str])
         device: Device to run on ('cpu' or 'cuda')
-    
+
     Returns:
         Dictionary mapping layer names to aggregated relevance tensors
     """
     print(f"Computing LRP scores for {len(samples)} samples...")
-    
-    model.to(device)
+
+    # Don't call model.to(device) - model may already be distributed across GPUs
+    # with device_map='auto'. Just get the device from model's first parameter.
+    if device == 'cpu':
+        model.to('cpu')
+    else:
+        # Auto-detect device from model (may be multi-GPU)
+        device = next(model.parameters()).device
+
     model.eval()
-    
+
     # Initialize relevance accumulator
     relevance_accumulator = {}
-    
-    for sample_idx, token_ids in enumerate(tqdm(samples, desc="LRP attribution")):
-        # Convert to tensor
-        input_ids = torch.tensor([token_ids], dtype=torch.long).to(device)
+
+    # Check if samples are strings (raw text) or token IDs
+    samples_are_strings = isinstance(samples[0], str) if samples else False
+    if samples_are_strings:
+        print("  Detected raw text prompts - will tokenize on the fly")
+
+    for sample_idx, sample in enumerate(tqdm(samples, desc="LRP attribution")):
+        # Handle both tokenized and raw text inputs
+        if samples_are_strings:
+            # Tokenize the text
+            encoded = tokenizer(
+                sample,
+                return_tensors='pt',
+                truncation=True,
+                max_length=2048
+            )
+            input_ids = encoded.input_ids.to(device)
+        else:
+            # Already tokenized
+            input_ids = torch.tensor([sample], dtype=torch.long).to(device)
         
         # Enable gradients
         with torch.set_grad_enabled(True):
@@ -120,29 +143,41 @@ def load_attribution_scores(path: str) -> Dict[str, torch.Tensor]:
 def compute_wanda_scores(
     model: PreTrainedModel,
     tokenizer: PreTrainedTokenizer,
-    samples: List[List[int]],
+    samples,  # Can be List[List[int]] or List[str]
     device: str = 'cpu'
 ) -> Dict[str, torch.Tensor]:
     """
     Compute Wanda importance scores: |W| * ||X||_2
-    
+
     Per Wanda paper: S_ij = |W_ij| · ||X_j||_2
     where ||X_j||_2 is L2 norm aggregated across ALL N×L tokens.
-    
+
     Args:
         model: LLaMA model
         tokenizer: HuggingFace tokenizer
-        samples: List of tokenized samples
+        samples: List of tokenized samples (List[List[int]]) OR raw text prompts (List[str])
         device: Device to run on
-    
+
     Returns:
         Dictionary mapping layer names to importance scores
     """
     print(f"Computing Wanda scores for {len(samples)} samples...")
-    
-    model.to(device)
+
+    # Don't call model.to(device) - model may already be distributed across GPUs
+    # with device_map='auto'. Just get the device from model's first parameter.
+    if device == 'cpu':
+        model.to('cpu')
+    else:
+        # Auto-detect device from model (may be multi-GPU)
+        device = next(model.parameters()).device
+
     model.eval()
-    
+
+    # Check if samples are strings (raw text) or token IDs
+    samples_are_strings = isinstance(samples[0], str) if samples else False
+    if samples_are_strings:
+        print("  Detected raw text prompts - will tokenize on the fly")
+
     # Dictionary to store ALL activations (not just norms)
     all_activations = {}
     
@@ -174,8 +209,21 @@ def compute_wanda_scores(
     
     # Forward passes to collect activations
     with torch.no_grad():
-        for sample_idx, token_ids in enumerate(tqdm(samples, desc="Wanda (forward)")):
-            input_ids = torch.tensor([token_ids], dtype=torch.long).to(device)
+        for sample_idx, sample in enumerate(tqdm(samples, desc="Wanda (forward)")):
+            # Handle both tokenized and raw text inputs
+            if samples_are_strings:
+                # Tokenize the text
+                encoded = tokenizer(
+                    sample,
+                    return_tensors='pt',
+                    truncation=True,
+                    max_length=2048
+                )
+                input_ids = encoded.input_ids.to(device)
+            else:
+                # Already tokenized
+                input_ids = torch.tensor([sample], dtype=torch.long).to(device)
+
             model(input_ids=input_ids)
     
     # Remove hooks
