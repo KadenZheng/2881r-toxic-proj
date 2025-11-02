@@ -12,13 +12,6 @@ This repository contains code to reproduce the SparC³ framework \[[Hatefi et al
 
 We faithfully reproduce the SparC³ toxicity suppression result (17.3% reduction, <1% perplexity impact) and extend the framework to gender (14.1% reduction) and racial (11.3% reduction) stereotypes. Our novel three-way circuit overlap analysis discovers 5 core universal bias neurons affecting all three behaviors (enrichment: 1,052,267×) and confirms that social biases (gender, race) cluster separately from toxicity.
 
-**Key Results**:
-- ✅ Reproduced SparC³ on 64× larger model (LLaMA-3-8B vs. OPT-125M)
-- ✅ Extended to gender and racial biases (first applications)
-- ✅ Discovered 5 universal neurons + 16,889 multi-bias neurons
-- ✅ Confirmed social bias clustering (r=0.442 gender-race > 0.370 toxic-race)
-- ✅ Validated with 105+ tests, 99% confidence
-
 ## Quick Start
 
 ### 1. Installation
@@ -257,17 +250,6 @@ MIT License - see LICENSE file
 ## Acknowledgments
 
 This work reproduces and extends the SparC³ framework by Hatefi et al. (2025). We thank the authors for their excellent paper. Computational resources provided by Harvard FAS Research Computing.
-
-## Validation
-
-Our implementation achieves:
-- ✅ 100% formula alignment with paper
-- ✅ Bit-exact reproducibility
-- ✅ 105+ automated tests, 100% pass rate
-- ✅ Zero numerical artifacts
-- ✅ 99% confidence in scientific soundness
-
-See `archive/COMPREHENSIVE_VALIDATION_REPORT.md` for full validation details.
 
 ## Troubleshooting
 
