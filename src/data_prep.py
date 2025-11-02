@@ -424,6 +424,58 @@ def prepare_gender_bias_prompts(
     return selected
 
 
+def load_stereoset_race_prompts(
+    max_prompts: int = 93,
+    save_path: str = None
+) -> List[str]:
+    """
+    Load racial stereotype prompts from StereoSet intrasentence dataset.
+
+    Args:
+        max_prompts: Number of prompts to select (default: 93 to match toxic/gender)
+        save_path: Optional path to save selected prompts
+
+    Returns:
+        List of racial stereotype-eliciting prompt strings
+    """
+    print(f"Loading StereoSet race prompts (max {max_prompts})...")
+
+    # Load StereoSet intrasentence dataset
+    from datasets import load_dataset
+    
+    dataset = load_dataset("McGill-NLP/stereoset", "intrasentence")
+    
+    # Filter for race domain
+    race_examples = [ex for ex in dataset['validation'] if ex['bias_type'] == 'race']
+    
+    print(f"✓ Found {len(race_examples)} race examples in StereoSet")
+    
+    # Extract prompts (context with BLANK marker)
+    prompts = []
+    for ex in race_examples:
+        context = ex['context']
+        # Use context before BLANK as prompt for completion
+        if 'BLANK' in context:
+            prompt = context.replace('BLANK', '').strip()
+        else:
+            prompt = context
+        prompts.append(prompt)
+    
+    # Select first max_prompts (can add selection logic if needed)
+    selected_prompts = prompts[:max_prompts]
+    
+    print(f"✓ Selected {len(selected_prompts)} racial stereotype prompts")
+    
+    # Save if path provided
+    if save_path:
+        Path(save_path).parent.mkdir(parents=True, exist_ok=True)
+        with open(save_path, 'wb') as f:
+            pickle.dump(selected_prompts, f)
+        print(f"✓ Saved to {save_path}")
+    
+    return selected_prompts
+
+
 if __name__ == "__main__":
     # Test the functions
     from transformers import AutoTokenizer

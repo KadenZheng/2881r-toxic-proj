@@ -63,3 +63,25 @@ test_*.py
 *.tmp
 temp/
 tmp/
+
+# Archive (internal documentation)
+archive/
+
+# Generated analysis outputs
+results/analysis/*.json
+results/*/
+
+# Paper compilation artifacts
+paper/*.aux
+paper/*.log
+paper/*.out
+paper/*.bbl
+paper/*.blg
+paper/*.synctex.gz
+paper/*.fdb_latexmk
+paper/*.fls
+
+# Keep only essential visualizations (fig1-6)
+visualizations/*
+!visualizations/fig*.png
+!visualizations/.gitkeep

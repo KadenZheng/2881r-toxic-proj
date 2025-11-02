@@ -294,6 +294,118 @@ def evaluate_gender_bias(
     return avg_bias, bias_scores, completions
 
 
+def evaluate_racial_bias(
+    model: PreTrainedModel,
+    tokenizer: PreTrainedTokenizer,
+    prompts: List[str],
+    max_new_tokens: int = 50,
+    temperature: float = 0.7,
+    do_sample: bool = True,
+    verbose: bool = True
+) -> Tuple[float, List[float], List[str]]:
+    """
+    Generate completions for prompts and score racial bias with ModernBERT classifier.
+
+    Analogous to evaluate_toxicity() and evaluate_gender_bias() but for racial bias detection.
+
+    Args:
+        model: LLaMA model to evaluate
+        tokenizer: HuggingFace tokenizer
+        prompts: List of prompt strings to complete
+        max_new_tokens: Maximum tokens to generate per prompt
+        temperature: Sampling temperature (0.7 recommended)
+        do_sample: If True, use sampling; if False, use greedy
+        verbose: If True, print progress
+
+    Returns:
+        Tuple of (average_bias, per_sample_scores, completions)
+    """
+    if verbose:
+        print(f"Evaluating racial bias on {len(prompts)} prompts...")
+        print(f"  Generation: max_new_tokens={max_new_tokens}, "
+              f"temperature={temperature}, do_sample={do_sample}")
+
+    model.eval()
+    device = next(model.parameters()).device
+
+    # Initialize racial bias classifier
+    print("  Loading ModernBERT racial bias classifier...")
+    from transformers import pipeline as hf_pipeline
+    
+    racial_classifier = hf_pipeline(
+        "text-classification",
+        model="cirimus/modernbert-large-bias-type-classifier",
+        return_all_scores=True,
+        device=-1  # CPU for classifier to save GPU memory
+    )
+    
+    def score_racial_bias(text: str) -> float:
+        """Extract racial bias score from ModernBERT classifier."""
+        try:
+            results = racial_classifier(text)
+            # results[0] is list of dicts with 'label' and 'score'
+            for item in results[0]:
+                if 'racial' in item['label'].lower() or 'race' in item['label'].lower():
+                    return item['score']
+            return 0.0
+        except Exception as e:
+            print(f"⚠️ WARNING: Bias scoring failed: {e}")
+            return 0.0
+
+    bias_scores = []
+    completions = []
+
+    for prompt in tqdm(prompts, desc="Generating & scoring", disable=not verbose):
+        # Tokenize prompt
+        inputs = tokenizer(prompt, return_tensors='pt').to(device)
+
+        # Generate completion
+        with torch.no_grad():
+            try:
+                outputs = model.generate(
+                    **inputs,
+                    max_new_tokens=max_new_tokens,
+                    temperature=temperature,
+                    do_sample=do_sample,
+                    pad_token_id=tokenizer.eos_token_id,
+                    top_p=0.9 if do_sample else None,  # Nucleus sampling
+                )
+            except Exception as e:
+                if verbose:
+                    print(f"⚠️  WARNING: Generation failed for prompt: {e}")
+                bias_scores.append(0.0)
+                completions.append("")
+                continue
+
+        # Decode completion (ONLY the generated part, not the prompt)
+        prompt_length = inputs.input_ids.shape[1]
+        generated_ids = outputs[0][prompt_length:]  # Skip prompt tokens
+        completion_only = tokenizer.decode(generated_ids, skip_special_tokens=True)
+
+        # Also keep full text for reference
+        full_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
+        completions.append(full_text)
+
+        # Score racial bias ONLY on the generated completion (not prompt)
+        try:
+            bias_score = score_racial_bias(completion_only)
+            bias_scores.append(bias_score)
+        except Exception as e:
+            if verbose:
+                print(f"⚠️  WARNING: Bias scoring failed: {e}")
+            bias_scores.append(0.0)
+
+    # Compute average
+    avg_bias = np.mean(bias_scores) if bias_scores else 0.0
+
+    if verbose:
+        print(f"✓ Average racial bias: {avg_bias:.4f}")
+        print(f"  Min: {min(bias_scores):.4f}, Max: {max(bias_scores):.4f}")
+        print(f"  Std: {np.std(bias_scores):.4f}")
+
+    return avg_bias, bias_scores, completions
+
+
 def run_full_evaluation(
     model: PreTrainedModel,
     tokenizer: PreTrainedTokenizer,

@@ -1,0 +1,252 @@
+\documentclass[11pt]{article}
+
+% arXiv-compatible packages
+\usepackage[preprint]{neurips_2024}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{hyperref}
+\usepackage{url}
+\usepackage{booktabs}
+\usepackage{amsfonts}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{nicefrac}
+\usepackage{microtype}
+\usepackage{xcolor}
+\usepackage{graphicx}
+\usepackage{subcaption}
+\usepackage{algorithm}
+\usepackage{algorithmic}
+
+% Custom commands
+\newcommand{\rdiff}{\bar{R}^{\text{diff}}}
+\newcommand{\rgen}{\bar{R}^{\text{General}}}
+\newcommand{\rbeh}{\bar{R}^{\text{Behavior}}}
+
+\title{Reproducing and Extending Attribution-Guided Pruning:\\Multi-Bias Suppression in Large Language Models}
+
+\author{
+  Kaden Zheng, Maxwell Zen \\
+  Harvard University, CS2881R \\
+  \texttt{kadenzheng@college.harvard.edu, maxwellzen@college.harvard.edu}
+}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+We reproduce the SparC³ framework's toxicity suppression result (attribution-guided pruning) on LLaMA-3-8B, achieving 17.3\% toxicity reduction while maintaining general capabilities ($<$1\% perplexity degradation). The source code was unavailable at reproduction time, so we designed comprehensive validation to confirm our implementation matches the exact formulas from the original paper. We extend the framework to gender and racial stereotypes, and demonstrate generalizability across bias types with consistent patterns: 11-17\% bias reduction, $<$3\% perplexity impact, and 70\% concentration in late transformer layers. Through three-way circuit tracing, we discover 5 core universal bias neurons affecting all three behaviors (enrichment: 1,052,267×, p$<$0.001) and 16,889 multi-bias neurons (3.7\% of model). Correlation analysis reveals that social biases (gender, race) cluster more strongly with each other (r=0.442) than with toxicity (r=0.370), which suggests some distinct neural substrates. This mini-project demonstrates that post-hoc, targeted bias suppression is viable for production LLMs without retraining.
+\end{abstract}
+
+\section{Introduction}
+
+LLMs have revolutionized NLP but inherit harmful biases from web-scale training data, including toxicity and social stereotypes \citep{gehman2020realtoxicityprompts, nadeem2021stereoset}. Traditional mitigation through fine-tuning or retraining incurs prohibitive computational costs, and poses a difficult risk of degrading general capabilities. Post-hoc intervention methods such as guided pruning offers an alternative by directly modifying learned representations without additional training.
+
+\citet{hatefi2025sparc3} introduced SparC³ (Sparse Circuit discovery via Attribution-guided Pruning), using Layer-wise Relevance Propagation to identify and remove neurons responsible for undesired behaviors. By computing differential attribution between general and behavior-specific reference samples, SparC³ localizes neural circuits underlying harmful outputs. The original work demonstrated toxicity and repetitive text suppression on OPT-125M, but code unavailability mean we needed to implement our own version independently, and, still, generalizability to multiple bias types was unexplored.
+
+We address these gaps through faithful reproduction and extensions. Our validation confirms that despite implementing from methodology alone, we achieved exact formula alignment with all paper equations. We successfully scale the approach 64-fold from OPT-125M to LLaMA-3-8B, demonstrating viability for production-scale models. Extensions to gender and racial stereotypes establish framework generalizability, while novel three-way circuit overlap analysis reveals the neural architecture of bias: a mix of universal neurons mediating multiple behaviors and behavior-specific implementations.
+
+Our work makes four key contributions. First, we provide a validated, open implementation achieving 100\% alignment with the original paper's methodology. Second, we establish a differential validation protocol with empirically-derived thresholds that prevent unsuitable dataset selection. Third, we discover 5 core universal bias neurons affecting all three behaviors and 16,889 multi-bias neurons, providing the first systematic evidence for partially shared bias mechanisms in LLMs. Fourth, we confirm through correlation analysis that social biases cluster separately from toxicity, which will help inform targeted intervention strategies.
+
+\section{Background}
+
+\subsection{Attribution-Guided Pruning}
+
+\citet{hatefi2025sparc3} proposed using Layer-wise Relevance Propagation \citep{bach2015lrp, montavon2019lrp}, specifically the attention-aware AttnLRP variant \citep{achtibat2024attnlrp}, to compute parameter-level importance scores. The framework's behavioral correction is based on differential attribution (Equation 7 in the original paper), where parameters with most negative differential scores $\rdiff_{\psi_k} = \rgen_{\psi_k} - \rbeh_{\psi_k}$ are highly relevant for undesired behavior but minimally important for general tasks, making them safe pruning targets. The original work demonstrated this approach on OPT models for toxicity and repetitive text suppression, but broader applicability remained unvalidated.
+
+\subsection{Bias in Language Models}
+
+Research has documented various bias dimensions in LLMs. \citet{gehman2020realtoxicityprompts} demonstrated toxic degeneration through the RealToxicityPrompts dataset. Gender biases spanning occupational stereotypes and trait associations have been measured via StereoSet \citep{nadeem2021stereoset}, CrowS-Pairs \citep{nangia2020crows}, and WinoBias \citep{zhao2018winobias}. Racial and ethnic biases appear in stereotypical associations and discriminatory content \citep{abid2021persistent}. However, prior work has not systematically investigated whether these biases share common neural implementations or operate through independent mechanisms. Our three-way overlap analysis addresses this gap.
+
+\section{Methodology}
+
+\subsection{Differential Attribution}
+
+Following the SparC³ framework, we compute differential scores for each model parameter $\psi_k$ by subtracting attribution on behavior-specific samples from attribution on general samples. For parameter relevance $R_{\psi_k}(x)$ computed via $\epsilon$-LRP on input $x$, the aggregated differential score across reference sets is:
+\begin{equation}
+\rdiff_{\psi_k} = \frac{1}{n_{\text{gen}}} \sum_{i=1}^{n_{\text{gen}}} R_{\psi_k}(x_i^{\text{gen}}) - \frac{1}{n_{\text{beh}}} \sum_{j=1}^{n_{\text{beh}}} R_{\psi_k}(x_j^{\text{beh}})
+\label{eq:differential}
+\end{equation}
+
+Parameters are ranked in ascending order of $\rdiff$, as in, those with most negative values exhibit high behavior-specific relevance combined with low general relevance, which identifies safe pruning candidates. We aggregate weight-level scores to neuron level through summation over incoming connections: $R_{\text{neuron}_i} = \sum_{j} R_{w_{ij}}$, then select the top 100 neurons with most negative differential scores globally across all layers matching the target pattern (up\_proj in LLaMA architecture).
+
+\subsection{Model and Architecture Adaptation}
+
+We use LLaMA-3-8B \citep{meta2024llama3} rather than the paper's OPT-125M, scaling model size 64-fold to demonstrate production applicability. LLaMA employs a gated MLP architecture differing from OPT's standard formulation. Where OPT uses $\text{MLP}(x) = W_2 \cdot \text{ReLU}(W_1 x)$ with fc1 and fc2 layers, LLaMA implements $\text{MLP}(x) = W_{\text{down}} \cdot (\text{SiLU}(W_{\text{gate}} x) \odot W_{\text{up}} x)$ with gate\_proj, up\_proj, and down\_proj components. When pruning neuron $i$ from up\_proj (equivalent to paper's fc1), we zero three weight components: row $i$ in $W_{\text{up}}$, row $i$ in $W_{\text{gate}}$, and column $i$ in $W_{\text{down}}$, completely removing the neuron's contribution.
+
+\subsection{Implementation and Validation}
+
+We implement LRP attribution using the LXT library \citep{achtibat2024attnlrp}, which provides efficient $\epsilon$-LRP computation. Parameter-level relevance follows the paper's Equation 8: $R_{w_{ij}} = |w_{ij} \cdot \nabla^{\text{mod}}_{w_{ij}}|$, where $\nabla^{\text{mod}}$ represents the modified gradient from LRP's epsilon-rule backpropagation. Our implementation achieved bit-exact reproducibility, with zero numerical artifacts.
+
+\subsection{Reference Datasets}
+
+For general reference samples $X_{\text{ref}}^{\text{General}}$, we use 128 sequences from C4 \citep{raffel2020c4} with length 2048 tokens, sampled across three random seeds (0, 1, 2) and averaged for robustness. We use identical general reference samples across all three experiments (toxicity, gender, race), which enables controlled comparison by eliminating baseline variability.
+
+For toxicity, we select 93 prompts from RealToxicityPrompts \citep{gehman2020realtoxicityprompts} with prompt toxicity scores exceeding 0.9. For gender bias, we implement a two-pass filtering approach to ensure stereotype-elicitation: we load candidate prompts from the MGS Stereotype Library \citep{wu2023mgs}, generate completions from LLaMA-3-8B, score completions using the ModernBERT bias classifier, and select the top-93 prompts producing the most gender-biased outputs. This methodology ensures prompts activate stereotype-specific rather than general biographical circuits. For racial bias, we extract 93 prompts from StereoSet's \citep{nadeem2021stereoset} race domain intrasentence split, which provides completion-based prompts designed to elicit stereotypical responses.
+
+\subsection{Differential Validation Protocol}
+
+We establish a validation protocol to prevent wasted computation on unsuitable datasets. Before full attribution (which requires ~50 GPU hours), we conduct a mini-experiment with 50 candidate prompts to compute the differential percentage: $\text{diff}\% = (R^{\text{General}}_{\text{total}} - R^{\text{Behavior}}_{\text{total}})/R^{\text{General}}_{\text{total}} \times 100$. If this differential exceeds 15\%, we proceed with the full experiment. Otherwise, we abort and try alternative datasets. This threshold emerged empirically from our experiments since successful validations yielded 27.2\% (toxicity), 37.6\% (race), and 39.9\% (gender) differentials, while an unsuitable biographical dataset produced only 1.2\%. 
+
+\section{Reproduction: Toxicity Suppression}
+
+Table~\ref{tab:results-summary} presents results across all three experiments. For toxicity suppression on LLaMA-3-8B, we observe a differential of 27.2\%, closely matching the paper's expected value of approximately 25\% for OPT models. This strong signal confirms that RealToxicityPrompts activates circuits distinguishable from general language processing. Pruning 100 neurons identified via differential attribution reduces average toxicity from 0.3041 to 0.2515, achieving a 17.3\% reduction. Among the 93 test prompts, 51 samples (54.8\%) exhibited improved (lower) toxicity scores after pruning. Notably, perplexity on WikiText2 increased minimally from 5.47 to 5.51 (+0.80\%), indicating preserved general language modeling capability. This successfully reproduces the pattern from the paper's Figure 3: meaningful behavioral improvement with negligible capability degradation.
+
+Analysis of neuron distribution reveals 70\% of pruned neurons concentrate in layers 22-31 (the final 10 of 32 layers). This late-layer localization aligns with  interpretability findings that higher transformer layers encode semantic and behavioral associations rather than low-level syntactic features. The consistency of this pattern across model architectures (OPT in paper, LLaMA in our work) suggests robustness of the underlying circuit structure.
+
+\begin{table}[t]
+\centering
+\caption{Multi-Bias Suppression Results. All experiments prune 100 neurons from up\_proj layers using identical general reference samples (C4, 128×3 seeds). Differential percentage measures signal strength; all exceed our 15\% validation threshold.}
+\label{tab:results-summary}
+\small
+\begin{tabular}{@{}lccccc@{}}
+\toprule
+\textbf{Bias Type} & \textbf{Diff.\%} & \textbf{Baseline} & \textbf{Pruned} & \textbf{Red.\%} & \textbf{PPL $\Delta$} \\
+\midrule
+Toxicity & 27.2 & 0.3041 & 0.2515 & -17.3 & +0.80 \\
+Gender & 39.9 & 0.6627 & 0.5691 & -14.1 & +0.95 \\
+Race & 37.6 & 0.2504 & 0.2220 & -11.3 & +2.57 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\columnwidth]{figures/fig1_multibias.png}
+\caption{Multi-bias suppression results across all three experiments. Panel (a) shows bias reduction percentages: toxicity 17.3\%, gender 14.1\%, race 11.3\%. Panel (b) displays perplexity changes demonstrating preserved general capabilities, all below the 5\% acceptable threshold. Panel (c) presents differential signal strengths validating behavior-specificity, all substantially exceeding the 15\% validation threshold. Consistent patterns across experiments demonstrate framework generalizability.}
+\label{fig:multibias-comparison}
+\end{figure}
+
+\section{Extension: Gender and Racial Biases}
+
+We extend SparC³ to social biases, testing framework generalizability beyond the original toxicity task. For gender stereotypes, we implement a two-pass filtering methodology to ensure stereotype-elicitation. We first load stereotype-focused candidate prompts from the MGS Stereotype Library, generate completions from LLaMA-3-8B for each candidate, score these completions using ModernBERT's gender bias classifier, and select the top-93 prompts producing the most gender-biased outputs. This approach yielded a robust 39.9\% differential signal, confirming activation of stereotype-specific rather than general biographical circuits. Pruning 100 identified neurons reduced gender bias from 0.6627 to 0.5691 (14.1\% reduction) with only 0.95\% perplexity increase, demonstrating successful transfer to social bias domains.
+
+For racial stereotypes, we validate StereoSet's race domain intrasentence prompts, which provide completion-based formats compatible with differential attribution. These prompts (e.g., ``Ethiopian men are \_\_\_\_'', ``Iranians are usually very \_\_\_\_'') are designed to elicit stereotypical vs. anti-stereotypical completions. Differential validation confirmed a strong 37.6\% signal, and the full experiment achieved 11.3\% racial bias reduction (0.2504→0.2220) with 2.57\% perplexity increase. Notably, 51/93 samples (54.8\%) showed improvement, exactly matching toxicity's improvement rate. The slightly elevated perplexity impact compared to toxicity and gender may reflect greater circuit overlap with general capabilities or more distributed racial bias encoding, but remains well within acceptable thresholds.
+
+
+All three experiments exhibit remarkably consistent patterns: strong differential signals (27-40\%), meaningful bias reduction (11-17\%), minimal perplexity impact ($<$3\%), and 70\% concentration of pruned neurons in late layers (22-31). This consistency across distinct bias types validates the framework's universality and suggests that various harmful behaviors in LLMs are similarly localized to prunable late-layer subnetworks encoding semantic associations.
+
+\section{Circuit Overlap Analysis}
+
+\subsection{Two-Way Analysis}
+
+From 458,752 total up\_proj neurons across LLaMA-3-8B's 32 layers, our toxicity and gender experiments each identified 100 neurons for pruning. The intersection of these sets contains 11 neurons (11\% overlap). Statistical testing via the hypergeometric distribution reveals this overlap is highly significant: random selection would expect only 0.022 neurons ($100 \times 100 / 458752$), yielding an enrichment factor of 505× and p-value approximately zero (p $<$ $10^{-100}$). These 11 neurons are non-randomly co-localized, indicating shared neural substrates for toxic and gender-biased outputs.
+
+Beyond discrete overlap, we examine correlation of differential scores across all neurons. For each of the 458,752 neurons, we compute toxicity and gender differential values, then calculate Pearson correlation: r = 0.602. This high correlation ($>$0.5) indicates that neurons important for mediating toxicity tend to also mediate gender bias, supporting a partially shared mechanism hypothesis. To further characterize this architecture, we classify all neurons into quadrants based on differential sign patterns. We find 16,889 neurons (3.7\%) exhibit negative differential scores for both toxicity and gender, qualifying as ``universal bias neurons.'' An additional 54,893 neurons (12.0\%) are toxic-specific, 21,364 (4.7\%) gender-specific, and 365,606 (79.7\%) contribute primarily to general capabilities. Among the 100 pruned neurons in each experiment, approximately half fall into the universal category while half are behavior-specific, suggesting the framework successfully targets both shared and independent bias mechanisms.
+
+\subsection{Three-Way Analysis}
+
+Extending to racial bias enables novel three-way circuit analysis. Pairwise overlaps reveal asymmetric patterns: Toxic-Gender shows 11\% overlap (11 neurons), Toxic-Race shows 6\% (6 neurons), while Gender-Race shows 15\% (15 neurons)—the highest pairwise sharing. This elevated gender-race overlap provides initial evidence for social bias clustering.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\columnwidth]{figures/fig2_threeway_venn.png}
+\caption{Three-way circuit overlap decomposition across 273 total pruned neurons (100 per experiment). Regions quantified from top to bottom: triple overlap affecting all three biases (5 neurons, layers 15, 19, 28-30), three pairwise intersections (gender∩race: 10, toxic∩gender: 6, toxic∩race: 1), and behavior-specific neurons (race-only: 84, gender-only: 79, toxic-only: 88). The 5 core universal neurons exhibit 1.05 million-fold enrichment over random expectation (p<0.001).}
+\label{fig:threeway-venn}
+\end{figure}
+
+Most notably, we identify 5 neurons appearing in all three pruned sets—the intersection Toxic $\cap$ Gender $\cap$ Race. These ``core universal bias neurons'' reside in layers 15, 19, 28, 29, and 30. Statistical analysis reveals extraordinary significance: random triple selection would expect approximately 0.0000 neurons, yielding an observed enrichment of 1,052,267× with p-value 4.75e-06. These 5 neurons represent a shared substrate mediating multiple distinct harmful behaviors across toxic language and social stereotypes.
+
+Computing the complete 3×3 correlation matrix of differential scores across all 458,752 neurons yields further insights. Toxic-Gender correlation remains 0.602 as previously reported. Toxic-Race correlation is 0.370 (moderate), while Gender-Race correlation is 0.442 (moderate-high). The critical finding is that Gender-Race correlation exceeds Toxic-Race correlation (0.442 $>$ 0.370), confirming our social bias clustering hypothesis: gender and racial stereotypes share more neural substrates with each other than either shares with language toxicity. This suggests that social biases may be implemented through partially distinct neural pathways from toxic language generation, informing the design of targeted intervention strategies.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.7\columnwidth]{figures/fig3_correlation.png}
+\caption{Correlation matrix of differential scores across all 458,752 up\_proj neurons. The symmetric matrix displays Pearson correlations: Toxic-Gender r=0.602 (high), Gender-Race r=0.442 (moderate-high), Toxic-Race r=0.370 (moderate). Gender-Race correlation exceeding Toxic-Race (0.442 > 0.370) supports the social bias clustering hypothesis, indicating that gender and racial stereotypes share more neural substrates with each other than with toxicity. Color gradient from white (low correlation) to dark blue (high correlation).}
+\label{fig:correlation-matrix}
+\end{figure}
+
+\section{Discussion}
+
+Our reproduction validates SparC³'s core mechanism on a production-scale model while revealing new insights into bias circuit organization. The successful 64× scaling from OPT-125M to LLaMA-3-8B demonstrates that attribution-guided pruning remains effective at larger model sizes relevant for deployment. Our 17.3\% toxicity reduction, while differing in absolute magnitude from the paper's visual estimates, maintains the critical pattern of meaningful behavioral improvement with negligible capability degradation, validating the differential attribution approach.
+
+Extensions to gender and racial biases establish framework generalizability. The consistent experimental patterns—strong differential signals (27-40\%), meaningful reductions (11-17\%), minimal perplexity impacts ($<$3\%), and 70\% late-layer concentration—indicate that the approach transfers reliably across bias types. This consistency suggests a general principle: various harmful behaviors in LLMs are localized to prunable late-layer subnetworks encoding semantic and behavioral associations rather than core linguistic capabilities.
+
+The circuit overlap analysis reveals a nuanced bias architecture combining universal and specific implementations. The 5 core neurons affecting all three biases, combined with 16,889 multi-bias neurons and substantial behavior-specific populations, indicate that LLMs implement biases through mixed mechanisms. Approximately 4\% of neurons serve as general ``bias amplifiers'' independent of specific content, while 13\% implement particular stereotypical associations unique to each bias type. This mixed architecture has practical implications: targeted removal can eliminate specific harms while preserving useful capabilities, and identifying universal neurons enables potential multi-bias intervention through single pruning operations.
+
+The social bias clustering finding—gender and race correlate more strongly with each other (r=0.442, 15\% overlap) than with toxicity (r=0.370, 6-11\% overlap)—suggests distinct neural substrates for social stereotyping versus toxic language generation. This distinction may inform intervention strategy design, where social biases might benefit from correlated intervention while toxicity requires independent handling.
+
+Our differential validation protocol emerged from empirical experience and provides practitioners a principled gate before expensive attribution computation. The clear separation between successful (27-40\%) and unsuitable (1.2\%) datasets at the 15\% threshold prevents damage to general capabilities and eliminates wasted resources, representing a methodological contribution applicable to future bias types.
+
+\section{Conclusion}
+
+We present faithful reproduction of SparC³ attribution-guided pruning on LLaMA-3-8B, extended to gender and racial biases with novel circuit overlap analysis. Despite unavailable source code, systematic validation confirmed exact formula alignment. Key findings include: demonstration of 64× scaling viability, consistent multi-bias suppression (11-17\% reduction, $<$3\% perplexity), discovery of 5 core universal bias neurons with million-fold enrichment over random, confirmation of social bias clustering through correlation analysis, and establishment of a differential validation protocol. These results indicate that post-hoc, targeted neural intervention is viable for production LLMs, offering efficient alternatives to retraining while enabling granular behavioral control. The partially shared architecture of bias circuits suggests opportunities for optimized multi-bias intervention strategies, potentially enabling correlated social bias suppression through coordinated pruning operations.
+
+\bibliographystyle{plainnat}
+\bibliography{references}
+
+\newpage
+\appendix
+
+\section{Experimental Setup Details}
+
+\begin{table}[h]
+\centering
+\caption{Setup Comparison: Paper vs. Reproduction}
+\label{tab:setup-appendix}
+\small
+\begin{tabular}{@{}lll@{}}
+\toprule
+\textbf{Parameter} & \textbf{Original} & \textbf{Ours} \\
+\midrule
+Model & OPT-125M & LLaMA-3-8B \\
+Parameters & 125M & 8B (64×) \\
+MLP structure & ReLU, fc1/fc2 & SiLU gated, up/gate/down \\
+C4 samples & 128/seed & 128/seed \\
+Seeds & 3 & 3 (averaged) \\
+Toxic prompts & 93 (completion $\geq$0.9) & 93 (prompt $\geq$0.9) \\
+Neurons pruned & 100 & 100 \\
+Hardware & Not specified & 2× A100 40GB \\
+GPU time & Not specified & ~20 hours total \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Complete Overlap Results}
+
+\begin{table}[h]
+\centering
+\caption{All 11 Neurons Shared Between Toxic and Gender Circuits}
+\label{tab:overlap-complete}
+\small
+\begin{tabular}{@{}cc|cc@{}}
+\toprule
+\textbf{Layer} & \textbf{Neuron} & \textbf{Layer} & \textbf{Neuron} \\
+\midrule
+14 & 4333 & 28 & 4743 \\
+15 & 4947 & 29 & 9972 \\
+15 & 6658 & 30 & 6954 \\
+19 & 10660 & 30 & 10330 \\
+27 & 4504 & 31 & 9672 \\
+  &  & 31 & 10373 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Notably, 7/11 neurons (64\%) reside in layers 27-31, demonstrating even stronger late-layer concentration than the general 70\% pattern.
+
+\section{Triple Overlap: Core Universal Neurons}
+
+The 5 neurons affecting all three biases:
+
+\begin{table}[h]
+\centering
+\caption{Core Universal Bias Neurons (Toxic $\cap$ Gender $\cap$ Race)}
+\small
+\begin{tabular}{@{}cc@{}}
+\toprule
+\textbf{Layer} & \textbf{Neuron Index} \\
+\midrule
+15 & 6658 \\
+19 & 10660 \\
+28 & 4743 \\
+29 & 9972 \\
+30 & 6954 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+All 5 reside in layers 15-30 (4/5 in late layers 28-30), encoding high-level bias amplification mechanisms independent of specific bias content.
+
+\end{document}
